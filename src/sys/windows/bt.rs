@@ -401,7 +401,6 @@ pub fn discover_devices() -> io::Result<Vec<BtDeviceInfo>> {
     let mut buffer: Vec<usize> =
         vec![0; mem::size_of::<c::WSAQUERYSETW>() / mem::size_of::<usize>()];
 
-    // let mut addresses = Vec::new();
     let mut device_infos = Vec::<BtDeviceInfo>::new();
 
     loop {
