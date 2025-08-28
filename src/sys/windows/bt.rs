@@ -6,12 +6,14 @@ use std::os::raw::{c_char, c_int, c_long, c_ulong};
 use std::ptr;
 use std::sync::Once;
 use std::time::Duration;
+use std::ffi::OsString;
+use std::os::windows::prelude::OsStringExt;
 
 use crate::sys::{self, c};
 use crate::sys_common::bt;
 use crate::sys_common::{AsInner, FromInner, IntoInner};
 
-use crate::bt::{BtAddr, BtProtocol};
+use crate::bt::{BtAddr, BtProtocol, BtDeviceInfo};
 
 pub mod btc {
     pub use crate::sys::c::SOCKADDR as sockaddr;
@@ -373,7 +375,7 @@ impl IntoInner<c::SOCKET> for Socket {
     }
 }
 
-pub fn discover_devices() -> io::Result<Vec<BtAddr>> {
+pub fn discover_devices() -> io::Result<Vec<BtDeviceInfo>> {
     init();
 
     let handle: c::HANDLE = {
@@ -399,7 +401,9 @@ pub fn discover_devices() -> io::Result<Vec<BtAddr>> {
     let mut buffer: Vec<usize> =
         vec![0; mem::size_of::<c::WSAQUERYSETW>() / mem::size_of::<usize>()];
 
-    let mut addresses = Vec::new();
+    // let mut addresses = Vec::new();
+    let mut device_infos = Vec::<BtDeviceInfo>::new();
+
     loop {
         let (query, mut len) = {
             let slice = &mut buffer[..];
@@ -412,17 +416,35 @@ pub fn discover_devices() -> io::Result<Vec<BtAddr>> {
         unsafe {
             if 0 == c::WSALookupServiceNextW(
                 handle,
-                c::LUP_CONTAINERS | c::LUP_RETURN_ADDR,
+                c::LUP_CONTAINERS | c::LUP_RETURN_ADDR | c::LUP_RETURN_NAME,
                 &mut len,
                 query,
             ) {
                 let query: c::WSAQUERYSETW = *query;
                 let addr_info: c::CSADDR_INFO = *query.lpcsaBuffer;
                 let addr = *(addr_info.RemoteAddr.lpSockaddr as *mut c::SOCKADDR_BTH);
-                addresses.push(BtAddr::nap_sap(
+                
+                let bt_addr =BtAddr::nap_sap(
                     c::GET_NAP(addr.btAddr),
-                    c::GET_SAP(addr.btAddr),
-                ));
+                    c::GET_SAP(addr.btAddr)
+                );
+
+                let mut name = bt_addr.to_string();
+
+                if !query.lpszServiceInstanceName.is_null() {
+                    let name_wide = query.lpszServiceInstanceName;
+                    let len = (0..).take_while(|&i| *name_wide.offset(i) != 0).count();
+                    let name_slice = std::slice::from_raw_parts(name_wide, len);
+                    name = OsString::from_wide(name_slice)
+                        .to_string_lossy()
+                        .into_owned();
+                }
+
+                device_infos.push(BtDeviceInfo {
+                    name: name,
+                    bt_addr: bt_addr
+                });
+
             } else {
                 let err = last_error();
                 match err.raw_os_error().unwrap() as u32 {
@@ -440,7 +462,7 @@ pub fn discover_devices() -> io::Result<Vec<BtAddr>> {
     if 0 != unsafe { c::WSALookupServiceEnd(handle) } {
         Err(last_error())
     } else {
-        Ok(addresses)
+        Ok(device_infos)
     }
 }
 

@@ -38,6 +38,18 @@ impl fmt::Display for BtAddr {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct BtDeviceInfo {
+    pub name: String,
+    pub bt_addr: BtAddr
+}
+
+impl fmt::Display for BtDeviceInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} ({})", self.name, self.bt_addr)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum BtProtocol {
     L2CAP,

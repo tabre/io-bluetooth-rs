@@ -2,20 +2,23 @@ use std::cmp;
 use std::io;
 use std::mem;
 use std::net::Shutdown;
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_int, c_void, c_char};
 use std::ptr;
 use std::time::{Duration, Instant};
+use std::ffi::CStr;
 
 mod libbt {
     pub use libbluetooth::bluetooth::{bdaddr_t, BTPROTO_L2CAP, BTPROTO_RFCOMM};
     pub use libbluetooth::hci::{inquiry_info, IREQ_CACHE_FLUSH};
-    pub use libbluetooth::hci_lib::{hci_close_dev, hci_get_route, hci_inquiry, hci_open_dev};
+    pub use libbluetooth::hci_lib::{
+        hci_close_dev, hci_get_route, hci_inquiry, hci_open_dev, hci_read_remote_name
+    };
     pub use libbluetooth::rfcomm::sockaddr_rc;
 }
 
 use libc;
 
-use crate::bt::{BtAddr, BtProtocol};
+use crate::bt::{BtAddr, BtProtocol, BtDeviceInfo};
 use crate::sys::fd::FileDesc;
 use crate::sys_common::bt::{getsockopt, setsockopt};
 use crate::sys_common::{AsInner, FromInner, IntoInner};
@@ -325,7 +328,7 @@ impl IntoInner<c_int> for Socket {
     }
 }
 
-pub fn discover_devices() -> io::Result<Vec<BtAddr>> {
+pub fn discover_devices() -> io::Result<Vec<BtDeviceInfo>> {
     let device_id = unsafe { libbt::hci_get_route(ptr::null_mut()) };
     if device_id == -1 {
         return Err(io::Error::last_os_error());
@@ -354,12 +357,35 @@ pub fn discover_devices() -> io::Result<Vec<BtAddr>> {
     }
 
     inquiry_infos.truncate(num_responses as usize);
-    let devices = inquiry_infos.iter().map(|ii| BtAddr(ii.bdaddr.b)).collect();
+
+    let mut name: [c_char; 256] = [0; 256];
+    let device_infos = inquiry_infos.iter().map(|ii| {
+        let bt_addr = BtAddr(ii.bdaddr.b);
+
+        BtDeviceInfo {
+            bt_addr: bt_addr,
+            name: match 0 > unsafe { libbt::hci_read_remote_name(
+                local_socket,
+                &libbt::bdaddr_t{ b: ii.bdaddr.b } as *const libbt::bdaddr_t,
+                name.len() as i32,
+                name.as_mut_ptr(),
+                0
+            )} {
+                true => bt_addr.to_string(),
+                false => unsafe {
+                    match CStr::from_ptr(name.as_ptr()).to_str() {
+                        Ok(name) => String::from(name),
+                        Err(_) => bt_addr.to_string()
+                    }
+                }
+            }
+        }
+    }).collect();
 
     if -1 == unsafe { libbt::hci_close_dev(local_socket) } {
         Err(io::Error::last_os_error())
     } else {
-        Ok(devices)
+        Ok(device_infos)
     }
 }
 
